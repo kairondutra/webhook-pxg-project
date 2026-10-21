@@ -17,16 +17,12 @@ st.set_page_config(
 
 # ====================== PROTEÇÃO POR SENHA ======================
 def check_password():
-    """Retorna True se a senha estiver correta."""
-
-    # Ainda não autenticou
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
 
     if st.session_state["authenticated"]:
-        return True  # já está logado
+        return True
 
-    # Tela de login
     st.title("👻 Enemy Dashboard")
     st.caption("Acesso restrito")
 
@@ -37,22 +33,19 @@ def check_password():
 
         if password == correct_password:
             st.session_state["authenticated"] = True
-            st.rerun()  # recarrega a página já autenticado
+            st.rerun()
         else:
             st.error("Senha incorreta")
 
     st.stop()
 
-# Chama a verificação de senha
 check_password()
 
 # ====================== CONFIGURAÇÕES ======================
-# Tenta pegar do secrets do Streamlit Cloud, senão do .env
 WEBHOOK_URL = st.secrets.get("DISCORD_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
 
 # ====================== FUNÇÕES AUXILIARES ======================
 def parse_session_json(json_text: str) -> dict:
-    """Valida e extrai os dados relevantes do JSON inserido."""
     data = json.loads(json_text)
     session = data["Session"]
     enemies = data["Enemies Defeated"]
@@ -61,7 +54,6 @@ def parse_session_json(json_text: str) -> dict:
     total_kills = sum(e.get("Count", 0) for e in enemies)
     total_rares = sum(e.get("Count", 0) for e in enemies if e.get("Rare"))
 
-    # Busca o nome do jogador na lista de inimigos
     player = next((e["Player"] for e in enemies if e.get("Player")), "-")
 
     return {
@@ -78,44 +70,65 @@ def parse_session_json(json_text: str) -> dict:
     }
 
 def process_enemies_dataframe(enemies_data: list, total_kills: int) -> pd.DataFrame:
-    """Prepara o DataFrame de inimigos com porcentagens e categorias."""
     df = pd.DataFrame(enemies_data).sort_values("Count", ascending=False)
-    
+
     if total_kills > 0:
         df["%"] = (df["Count"] / total_kills * 100).round(1)
     else:
         df["%"] = 0.0
 
-    df["Tipo"] = df["Rare"].apply(lambda x: "⭐ Shiny" if x else "Normal")
+    def get_tipo(row):
+        name = row["Enemy"]
+        if name.startswith("Shiny "):
+            return "⭐ Shiny"
+        if name.startswith("Enraged "):
+            return "🔥 Mega"
+        if row.get("Rare"):
+            return "✨ Raro"
+        return "Normal"
+
+    df["Tipo"] = df.apply(get_tipo, axis=1)
     return df
 
-def calculate_shiny_rates(df: pd.DataFrame) -> list[dict]:
-    """Calcula a taxa de surgimento de Shinies por espécie."""
-    normals = df[~df["Rare"]]["Enemy"].unique()
-    shinies = df[df["Rare"]]["Enemy"].unique()
-    
+def calculate_rare_rates(df: pd.DataFrame) -> list[dict]:
+    normals = set(df[~df["Rare"]]["Enemy"].unique())
     rates = []
-    for shiny in shinies:
-        base_name = shiny.replace("Shiny ", "").strip()
-        if base_name in normals:
-            normal_c = df[(df["Enemy"] == base_name) & (~df["Rare"])]["Count"].sum()
-            shiny_c = df[(df["Enemy"] == f"Shiny {base_name}") & (df["Rare"])]["Count"].sum()
-            total_e = normal_c + shiny_c
-            taxa_e = (total_e / shiny_c) if shiny_c > 0 else 0
 
-            rates.append({
-                "especie": base_name,
-                "normal_count": normal_c,
-                "shiny_count": shiny_c,
-                "total": total_e,
-                "taxa": taxa_e
-            })
+    rare_rows = df[df["Rare"]]
+
+    for _, row in rare_rows.iterrows():
+        name = row["Enemy"]
+
+        if name.startswith("Shiny "):
+            base_name = name.replace("Shiny ", "").strip()
+            tipo = "Shiny"
+        elif name.startswith("Enraged "):
+            base_name = name.replace("Enraged ", "").strip()
+            tipo = "Mega"
+        else:
+            base_name = name
+            tipo = "Raro"
+
+        if base_name not in normals:
+            continue
+
+        normal_c = df[(df["Enemy"] == base_name) & (~df["Rare"])]["Count"].sum()
+        rare_c = row["Count"]
+        total_e = normal_c + rare_c
+        taxa = (total_e / rare_c) if rare_c > 0 else 0
+
+        rates.append({
+            "especie": base_name,
+            "tipo": tipo,
+            "normal_count": normal_c,
+            "rare_count": rare_c,
+            "total": total_e,
+            "taxa": taxa
+        })
+
     return rates
 
-def send_to_discord(session: dict, df_s: pd.DataFrame, shiny_rates: list[dict]) -> bool:
-    """Envia os dados para o Discord com horário no topo e data no footer."""
-
-    # 1. Tratamento da Data e do Horário de Início
+def send_to_discord(session: dict, df_s: pd.DataFrame, rare_rates: list[dict]) -> bool:
     try:
         dt_obj = datetime.strptime(session["start"], "%Y-%m-%d %H:%M:%S")
         horario_inicio = dt_obj.strftime("%H:%M")
@@ -124,7 +137,6 @@ def send_to_discord(session: dict, df_s: pd.DataFrame, shiny_rates: list[dict]) 
         horario_inicio = session["start"]
         data_sessao = datetime.now().strftime("%d/%m/%Y")
 
-    # 2. Tratamento da Duração
     duracao_raw = session["duration"]
     try:
         partes = [int(p) for p in duracao_raw.split(":")]
@@ -141,11 +153,9 @@ def send_to_discord(session: dict, df_s: pd.DataFrame, shiny_rates: list[dict]) 
     except Exception:
         duracao_tratada = duracao_raw
 
-    # 3. Contagem de Normais vs Shinies
     normais_count = df_s[~df_s["Rare"]]["Count"].sum()
-    shinies_count = df_s[df_s["Rare"]]["Count"].sum()
+    raros_count = df_s[df_s["Rare"]]["Count"].sum()
 
-    # 4. Colunas da Embed
     fields = [
         {
             "name": "Tempo",
@@ -154,38 +164,34 @@ def send_to_discord(session: dict, df_s: pd.DataFrame, shiny_rates: list[dict]) 
         },
         {
             "name": "Derrotados",
-            "value": f"**Normais:** `{normais_count:,}`\n**Shinies:** `{shinies_count}`",
-            "inline": True
-        },
-        {
-            "name": "Média",
-            "value": f"**Kills/h:** `{session['kills_h']:,}`\n**Rares/h:** `{session['rare_h']}`",
+            "value": f"**Normais:** `{normais_count:,}`\n**Raros:** `{raros_count}`",
             "inline": True
         }
     ]
 
-    # 5. Taxa de Shinies por Espécie
-    if shiny_rates:
+    if rare_rates:
         rates_text = ""
-        for r in shiny_rates:
-            if r["shiny_count"] > 0:
-                rates_text += f"• **{r['especie']}**: `1` a cada **{r['taxa']:.0f}** _({r['shiny_count']} shinies / {r['total']} kills)_\n"
+        for r in rare_rates:
+            label = "Shiny" if r["tipo"] == "Shiny" else "Mega" if r["tipo"] == "Mega" else "Raro"
+            if r["rare_count"] > 0:
+                rates_text += f"• **{label} {r['especie']}**: `1` a cada **{r['taxa']:.0f}**\n"
             else:
-                rates_text += f"• **{r['especie']}**: _nenhum shiny_\n"
+                rates_text += f"• **{label} {r['especie']}** : _nenhum_\n"
 
         fields.append({
-            "name": "✨ Taxa de Shinies por Espécie",
+            "name": "✨ Taxa de Raros por Espécie",
             "value": rates_text.strip(),
             "inline": False
         })
 
-    # 6. Detalhamento de Inimigos
     monsters_table = "```text\n"
-    monsters_table += f"{'Pokémon':<16} | {'Quantidade':<6} | {'%'}\n"
+    monsters_table += f"{'Pokémon':<16} | {'Qtd':<6} | {'%'}\n"
     monsters_table += "-" * 32 + "\n"
 
     for _, row in df_s.iterrows():
-        name = row['Enemy'][:15]
+        name = row["Enemy"][:15]
+        if name.startswith("Enraged "):
+            name = "Mega " + name[8:]
         monsters_table += f"{name:<16} | {row['Count']:<6} | {row['%']}%\n"
 
     monsters_table += "```"
@@ -196,9 +202,6 @@ def send_to_discord(session: dict, df_s: pd.DataFrame, shiny_rates: list[dict]) 
         "inline": False
     })
 
-    # 7. Rodapé
-    footer_text = f"Data da Sessão: {data_sessao}"
-
     payload = {
         "embeds": [
             {
@@ -206,24 +209,22 @@ def send_to_discord(session: dict, df_s: pd.DataFrame, shiny_rates: list[dict]) 
                 "color": 0x9B59B6,
                 "fields": fields,
                 "footer": {
-                    "text": footer_text
+                    "text": f"Data da Sessão: {data_sessao}"
                 }
             }
         ]
     }
 
-    response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+    response = requests.post(str(WEBHOOK_URL), json=payload, timeout=10)
     return response.status_code in (200, 204)
 
 # ====================== INTERFACE STREAMLIT ======================
 st.title("👻 Enemy Statistics Dashboard")
 st.caption("Cole o JSON direto da área de transferência (Ctrl+V)")
 
-# Session State Initializer
 if "sessions" not in st.session_state:
     st.session_state.sessions = []
 
-# Seção: Adicionar Sessão
 st.subheader("➕ Adicionar Sessão")
 json_text = st.text_area(
     "Cole o JSON aqui (Ctrl+V)",
@@ -232,8 +233,8 @@ json_text = st.text_area(
 )
 
 col_btn1, col_btn2, _ = st.columns([1, 1, 4])
-add_clicked = col_btn1.button("Adicionar sessão", type="primary", use_container_width=True)
-clear_clicked = col_btn2.button("Limpar tudo", use_container_width=True)
+add_clicked = col_btn1.button("Adicionar sessão", type="primary", width='stretch')
+clear_clicked = col_btn2.button("Limpar tudo", width='stretch')
 
 if clear_clicked:
     st.session_state.sessions = []
@@ -245,7 +246,7 @@ if add_clicked:
     else:
         try:
             new_session = parse_session_json(json_text)
-            
+
             if any(s["id"] == new_session["id"] for s in st.session_state.sessions):
                 st.warning(f"Sessão {new_session['id']} já foi adicionada.")
             else:
@@ -254,7 +255,7 @@ if add_clicked:
                     f"Sessão {new_session['id']} adicionada! "
                     f"Personagem: {new_session['player']} | "
                     f"{new_session['kills']} kills | "
-                    f"{new_session['rares']} rares"
+                    f"{new_session['rares']} raros"
                 )
                 st.rerun()
 
@@ -263,7 +264,6 @@ if add_clicked:
         except KeyError as e:
             st.error(f"JSON incompleto. Faltando a chave: {e}")
 
-# Seção: Exibição das Sessões
 if not st.session_state.sessions:
     st.info("Nenhuma sessão adicionada ainda. Cole um JSON acima.")
     st.stop()
@@ -271,46 +271,40 @@ if not st.session_state.sessions:
 st.divider()
 
 for s in st.session_state.sessions:
-    title = f"🎮 {s['player']} — Sessão {s['id']} | {s['start']} | {s['kills']} kills | {s['rares']} rares"
-    
+    title = f"🎮 {s['player']} — Sessão {s['id']} | {s['start']} | {s['kills']} kills | {s['rares']} raros"
+
     with st.expander(title, expanded=True):
         df_s = process_enemies_dataframe(s["enemies"], s["kills"])
-        shiny_rates = calculate_shiny_rates(df_s)
+        rare_rates = calculate_rare_rates(df_s)
 
-        # Métricas
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Kills", f"{s['kills']:,}")
-        col2.metric("Rares", f"{s['rares']}")
+        col2.metric("Raros", f"{s['rares']}")
         col3.metric("Kills/h", f"{s['kills_h']}")
         col4.metric("Duração", s["duration"])
 
-        # Taxa Shiny
-        st.subheader("✨ Taxa de Shiny por Espécie")
-        if shiny_rates:
-            for rate in shiny_rates:
-                if rate["shiny_count"] > 0:
-                    st.write(
-                        f"**{rate['especie']}**: 1 a cada **{rate['taxa']:.0f}** "
-                        f"({rate['shiny_count']} shinies em {rate['total']} kills)"
-                    )
-                else:
-                    st.write(f"**{rate['especie']}**: nenhum shiny")
+        st.subheader("✨ Taxa de Raros por Espécie")
+        if rare_rates:
+            for rate in rare_rates:
+                label = "Shiny" if rate["tipo"] == "Shiny" else "Mega" if rate["tipo"] == "Mega" else "Raro"
+                st.write(
+                    f"**{rate['especie']}** ({label}): 1 a cada **{rate['taxa']:.0f}** "
+                    f"({rate['rare_count']} {label.lower()}s em {rate['total']} kills)"
+                )
         else:
-            st.info("Nenhum shiny nesta sessão.")
+            st.info("Nenhum raro nesta sessão.")
 
-        # Tabela
         df_display = df_s[["Enemy", "Count", "%", "Tipo"]].rename(
             columns={"Enemy": "Monstro", "Count": "Kills"}
         )
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        st.dataframe(df_display, width='stretch', hide_index=True)
 
-        # Envio para o Discord
         if st.button(f"Enviar Sessão {s['id']} para o Discord", key=f"send_{s['id']}"):
             if not WEBHOOK_URL:
-                st.error("Webhook não configurado nos Secrets.")
+                st.error("Webhook não configurado nos Secrets / .env")
             else:
                 try:
-                    if send_to_discord(s, df_s, shiny_rates):
+                    if send_to_discord(s, df_s, rare_rates):
                         st.success(f"Sessão {s['id']} enviada com sucesso!")
                     else:
                         st.error("Erro ao enviar a mensagem para o Discord.")
