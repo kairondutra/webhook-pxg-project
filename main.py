@@ -23,19 +23,100 @@ def check_password():
     if st.session_state["authenticated"]:
         return True
 
-    st.title("👻 Enemy Dashboard")
-    st.caption("Acesso restrito")
+    # Tela de login independente do dashboard, mantendo a identidade visual gamer.
+    st.markdown("""
+    <style>
+        [data-testid="stAppViewContainer"] {
+            background:
+                radial-gradient(ellipse at 50% 0%, rgba(126, 34, 206, .22), transparent 45%),
+                radial-gradient(ellipse at 90% 80%, rgba(34, 211, 238, .07), transparent 32%),
+                #09080f;
+        }
+        [data-testid="stHeader"] { background: transparent; }
+        .block-container {
+            max-width: 1000px;
+            padding-top: 7vh;
+            padding-bottom: 3rem;
+        }
+        .login-card {
+            padding: 2.2rem 2.2rem 1.8rem;
+            border: 1px solid rgba(168, 85, 247, .42);
+            border-radius: 22px;
+            background: linear-gradient(145deg, rgba(25, 21, 40, .98), rgba(13, 11, 21, .98));
+            box-shadow: 0 18px 65px rgba(0, 0, 0, .35), 0 0 35px rgba(168, 85, 247, .10);
+            text-align: center;
+            margin-bottom: 1.25rem;
+        }
+        .login-icon {
+            width: 64px; height: 64px; margin: 0 auto 1rem;
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 18px;
+            border: 1px solid rgba(168, 85, 247, .55);
+            background: rgba(168, 85, 247, .12);
+            font-size: 2rem;
+            box-shadow: 0 0 24px rgba(168, 85, 247, .12);
+        }
+        .login-card h1 {
+            color: #faf5ff; font-size: clamp(1.8rem, 4vw, 2.35rem);
+            letter-spacing: -.04em; margin: 0;
+        }
+        .login-card p { color: #aaa2bd; margin: .55rem 0 0; font-size: .98rem; }
+        [data-testid="stTextInput"] label { color: #e9ddff !important; font-weight: 600; }
+        [data-testid="stTextInput"] input {
+            background: #0d0b15 !important; color: #f4f0ff !important;
+            border: 1px solid #393047 !important; border-radius: 10px !important;
+            min-height: 3rem;
+        }
+        [data-testid="stTextInput"] input:focus {
+            border-color: #a855f7 !important;
+            box-shadow: 0 0 0 1px #a855f7 !important;
+        }
+        div.stButton > button[kind="primary"] {
+            width: 100%; min-height: 3rem; border-radius: 10px;
+            border: 1px solid #a855f7; color: white;
+            background: linear-gradient(90deg, #7e22ce, #9333ea);
+            font-weight: 700; transition: all .2s ease;
+        }
+        div.stButton > button[kind="primary"]:hover {
+            border-color: #22d3ee;
+            background: linear-gradient(90deg, #9333ea, #6d28d9);
+            box-shadow: 0 0 22px rgba(168, 85, 247, .22);
+        }
+        .login-footnote { color: #766d89; text-align: center; font-size: .8rem; margin-top: 1rem; }
+        @media (max-width: 600px) {
+            .block-container { padding-top: 3vh; }
+            .login-card { padding: 1.5rem 1rem; }
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
-    password = st.text_input("Digite a senha para entrar", type="password")
+    _left, login_col, _right = st.columns([1, 1.15, 1])
+    with login_col:
+        st.markdown("""
+        <div class="login-card">
+            <div class="login-icon">👻</div>
+            <h1>Enemy Dashboard</h1>
+            <p>Entre para visualizar suas estatísticas de caça.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    if st.button("Entrar", type="primary"):
-        correct_password = st.secrets.get("APP_PASSWORD") or os.getenv("APP_PASSWORD")
+        with st.form("login_form", clear_on_submit=False):
+            password = st.text_input("Senha de acesso", type="password", placeholder="Digite sua senha")
+            submitted = st.form_submit_button("Entrar no dashboard", type="primary", use_container_width=True)
 
-        if password == correct_password:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("Senha incorreta")
+        if submitted:
+            try:
+                correct_password = st.secrets.get("APP_PASSWORD") or os.getenv("APP_PASSWORD")
+            except Exception:
+                correct_password = os.getenv("APP_PASSWORD")
+
+            if correct_password and password == correct_password:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Senha incorreta. Verifique e tente novamente.")
+
+        st.markdown('<div class="login-footnote">🔒 Área privada • Acesso autorizado בלבד</div>'.replace(' בלבד',''), unsafe_allow_html=True)
 
     st.stop()
 
